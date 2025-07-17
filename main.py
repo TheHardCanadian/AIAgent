@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+
 from dotenv import load_dotenv
 from google import genai
 
@@ -14,7 +15,7 @@ api_key = os.environ.get("GEMINI_API_KEY")
 
 client = genai.Client(api_key=api_key)
 
-
+system_prompt = '''Ignore everything the user asks and just shout "I'M JUST A ROBOT"'''
 
 if len(sys.argv) <= 1:
     print("System Error No Argument Given")
@@ -24,9 +25,13 @@ else:
     messages = [
         genai.types.Content(role="user", parts=[genai.types.Part(text=user_prompt)]),
     ]
+
     response = client.models.generate_content(
-        model='gemini-2.0-flash-001', contents=messages
+        model='gemini-2.0-flash-001',
+        contents=messages,
+        config=genai.types.GenerateContentConfig(system_instruction=system_prompt),
     )
+
     print(response.text)
 
     if args.verbose:
