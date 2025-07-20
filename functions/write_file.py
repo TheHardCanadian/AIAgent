@@ -1,4 +1,5 @@
 import os
+from google import genai
 
 def write_file(working_directory, file_path, content):
 
@@ -9,8 +10,6 @@ def write_file(working_directory, file_path, content):
 		return f'Error: Cannot write to "{file_path} as it is outside the working directory'
 	
 	if not os.path.exists(abs_file):
-		print(os.path.exists(abs_file))
-		print(abs_file)
 		try:
 			new_dir = os.makedirs(os.path.dirname(abs_file))
 			print(new_dir)
@@ -27,9 +26,21 @@ def write_file(working_directory, file_path, content):
 		return f"Error: {e}"
 
 
-
-
-
-
-
-
+schema_write_file = genai.types.FunctionDeclaration(
+    name="write_file",
+    description = "write the specified content to the specified file, constrained to the working directory.",
+    parameters=genai.types.Schema(
+        type=genai.types.Type.OBJECT,
+        properties={
+            "file_path":genai.types.Schema(
+                type=genai.types.Type.STRING,
+                description="The path to the file to write to, relative to the working directory",
+            ),
+			"content": genai.types.Schema(
+				type=genai.types.Type.STRING,
+				description="The content to write to the file",
+			)
+        },
+		required=["file_path", "content"]
+    )
+)
