@@ -4,61 +4,7 @@ import argparse
 import json
 from dotenv import load_dotenv
 from google import genai
-from functions.get_files_info import get_files_info, schema_get_files_info
-from functions.get_file_content import get_file_content, schema_get_file_content
-from functions.run_python import run_python_file, schema_run_python_file
-from functions.write_file import write_file, schema_write_file
-
-
-
-def call_function(function_call_part, verbose=False):
-    function_map = {
-        "get_files_info": get_files_info,
-        "get_file_content": get_file_content,
-        "run_python_file": run_python_file,
-        "write_file": write_file,
-    }
-
-    function_name = function_call_part.name
-
-    if verbose:
-        print(f"Calling function {function_name}({function_call_part.args})")
-    else:
-        print(f" - Calling function: {function_name}")
-
-    if function_name not in function_map:
-        return genai.types.Content(
-            role="tool",
-            parts=[
-                genai.types.Part.from_function_response(
-                    name=function_name,
-                    response={"error": f"Unknown function: {function_name}"},
-                )
-            ],
-        )
-
-    args = dict(function_call_part.args)
-    args["working_directory"] = "./calculator"
-    function_result = function_map[function_name](**args)
-    return genai.types.Content(
-        role="tool",
-        parts=[
-            genai.types.Part.from_function_response(
-                name=function_name,
-                response={"result": function_result},
-            )
-        ],
-    )
-
-
-available_functions = genai.types.Tool(
-    function_declarations=[
-        schema_get_files_info,
-        schema_get_file_content,
-        schema_run_python_file,
-        schema_write_file
-    ]
-)
+from call_functions import available_functions, call_function
 
 def main():
     load_dotenv()
@@ -71,19 +17,23 @@ def main():
 
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
+    verbose = args.verbose
 
     system_prompt = """
-    You are a helpful AI coding agent.
-    
-    When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
-    
-    - List files and directories
-    - Read file contents
-    - Execute Python files with optional arguments
-    - Write or overwrite files
-    
-    All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
-    """
+You are a helpful AI coding agent working in a calculator project directory.
+
+When a user asks a question, you should explore the codebase using the available functions to understand how it works before providing an answer.
+
+Available operations:
+- List files and directories to understand the project structure
+- Read file contents to analyze the code
+- Execute Python files with optional arguments to test functionality
+- Write or overwrite files when needed
+
+Always start by exploring the project structure with get_files_info, then read relevant files with get_file_content to understand the codebase before answering questions.
+
+All paths should be relative to the working directory.
+"""
 
     if len(sys.argv) <= 1:
         print("System Error No Argument Given")
@@ -94,38 +44,57 @@ def main():
             genai.types.Content(role="user", parts=[genai.types.Part(text=user_prompt)]),
         ]
 
-        response = client.models.generate_content(
-            model='gemini-2.0-flash-001',
-            contents=messages,
-            config=genai.types.GenerateContentConfig(tools=[available_functions],system_instruction=system_prompt),
-        )
-
-        if args.verbose:
-            print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-            print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
-
-        if not response.function_calls:
-            raise Exception("no function responses generated, exiting.")
-
-        function_responses = []
-        for function_call_part in response.function_calls:
-            function_call_result = call_function(function_call_part, args.verbose)
-            if (
-                    not function_call_result.parts
-                    or not function_call_result.parts[0].function_response
-            ):
-                raise Exception("empty function call result")
-            if args.verbose:
-                print(f"-> {function_call_result.parts[0].function_response.response}")
-            function_responses.append(function_call_result.parts[0])
+        content_count = 0
+        while True:
+            content_count += 1
+            if content_count > 20:
+                print(f"Maximum iterations reached")
+                sys.exit(1)
+            try:
+                final_response = generate_content(client, messages, verbose, system_prompt)
+                if final_response:
+                    print(f"Final response:\n{final_response}")
+                    break
+            except Exception as e:
+                print(f"Error generating content: {e}")
 
 
+def generate_content(client, messages, verbose, system_prompt):
+    response = client.models.generate_content(
+        model='gemini-2.0-flash-001',
+        contents=messages,
+        config=genai.types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
+    )
+    if verbose:
+        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
+        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
 
-        if args.verbose:
-            print(f"User prompt: {user_prompt}")
-            print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-            print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+    if response.candidates:
+        for candidate in response.candidates:
+            function_call_content = candidate.content
+            messages.append(function_call_content)
+
+    if not response.function_calls:
+        return response.text
+
+    function_responses = []
+    for function_call_part in response.function_calls:
+        function_call_result = call_function(function_call_part, verbose)
+        if (
+                not function_call_result.parts
+                or not function_call_result.parts[0].function_response
+        ):
+            raise Exception("empty function call result")
+        if verbose:
             print(f"-> {function_call_result.parts[0].function_response.response}")
+        function_responses.append(function_call_result.parts[0])
+
+    if not function_responses:
+        raise Exception("no function responses generated, exiting.")
+
+    messages.append(genai.types.Content(parts=function_responses, role="tool"))
+    return None
+
 
 if __name__ == "__main__":
     main()
